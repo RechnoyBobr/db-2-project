@@ -75,9 +75,10 @@ services:
       - MINIO_ROOT_PASSWORD=minioadmin
     volumes:
       - minio_data:/data
-    command: server /data
+    command: server /data --console-address ":9001"
     ports:
       - "9300:9000"
+      - "9001:9001"   # Web UI (Console)
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.10

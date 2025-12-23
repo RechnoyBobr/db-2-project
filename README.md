@@ -40,8 +40,8 @@ docker compose --profile tools run --rm generator
 
 ### Где найти файлы в MinIO
 
-Открой MinIO Console:
-- http://localhost:37007
+Открыть MinIO Console:
+- адрес `localhost:9001`
 - логин/пароль по умолчанию: `minioadmin / minioadmin`
 
 По умолчанию используется:
