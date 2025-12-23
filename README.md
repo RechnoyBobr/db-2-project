@@ -23,7 +23,7 @@ docker compose ps
 ### Полезные UI/эндпоинты
 
 - Spark Master UI: http://localhost:8080
-- MinIO S3 endpoint: http://localhost:9000
+- MinIO S3 endpoint: http://localhost:9300
 - ClickHouse HTTP: http://localhost:8123
 
 ## 2) Генератор данных (Parquet + загрузка в MinIO)
