@@ -18,6 +18,7 @@ services:
     working_dir: /app
     volumes:
       - ./generate_data.py:/app/generate_data.py:ro
+      - ./data:/app/data 
     environment:
       - GEN_DAYS=2
       - GEN_USERS=50
@@ -77,7 +78,6 @@ services:
     command: server /data
     ports:
       - "9300:9000"
-      - "37007:37007"
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.10
