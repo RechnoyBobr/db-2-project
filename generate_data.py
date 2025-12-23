@@ -3,16 +3,15 @@
 
 Generates plausible OLTP entities and Kafka-like vehicle_positions events.
 
-Outputs:
-  ./data/oltp/*.csv
-  ./data/kafka/vehicle_positions.jsonl
+Outputs (raw, parquet):
+    ./data/oltp/*.parquet
+    ./data/kafka/vehicle_positions.parquet
 
-This script does NOT require a running Postgres. It just creates files.
+This script does NOT require a running Postgres. It just creates files (and can optionally upload to MinIO).
 """
 
 from __future__ import annotations
 
-import csv
 import json
 import math
 import os
@@ -26,6 +25,13 @@ try:
     import boto3  # type: ignore
 except Exception:  # pragma: no cover
     boto3 = None
+
+try:
+    import pyarrow as pa  # type: ignore
+    import pyarrow.parquet as pq  # type: ignore
+except Exception:  # pragma: no cover
+    pa = None
+    pq = None
 
 
 @dataclass(frozen=True)
@@ -118,6 +124,19 @@ def _put_dir_to_s3(
             continue
         key = f"{prefix}/{path.relative_to(base_dir).as_posix()}"
         s3.upload_file(str(path), bucket, key)
+
+
+def _write_parquet(path: Path, rows: list[dict], schema) -> None:
+    """Write a list[dict] as a single parquet file.
+
+    schema: pyarrow.Schema
+    """
+    if pa is None or pq is None:
+        raise RuntimeError("pyarrow is not installed. Install it to generate parquet files.")
+
+    table = pa.Table.from_pylist(rows, schema=schema)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, path, compression="zstd")
 
 
 def generate(
@@ -277,80 +296,105 @@ def generate(
     # events_count ≈ days * 86400/position_interval_s * (n_routes * vehicles_per_route)
     # Defaults are intentionally small to avoid high CPU/IO load.
 
-    events_path = kafka_dir / "vehicle_positions.jsonl"
-    with events_path.open("w", encoding="utf-8") as f:
-        t = start_date
-        end = start_date + timedelta(days=days)
-        while t < end:
-            for v in vehicles:
-                route_id = v["route_id"]
-                city = city_by_route[route_id]
-                # small random walk around city center
-                lat = city.lat + random.uniform(-0.05, 0.05)
-                lon = city.lon + random.uniform(-0.08, 0.08)
-                speed = max(0.0, random.gauss(28.0, 12.0))  # km/h
-                passengers = max(0, int(random.gauss(25, 12)))
+    # --- vehicle_positions (raw stream) -> Parquet ---
+    vehicle_positions = []
+    t = start_date
+    end = start_date + timedelta(days=days)
+    while t < end:
+        event_time = t.isoformat().replace("+00:00", "Z")
+        for v in vehicles:
+            route_id = v["route_id"]
+            city = city_by_route[route_id]
+            lat = city.lat + random.uniform(-0.05, 0.05)
+            lon = city.lon + random.uniform(-0.08, 0.08)
+            speed = max(0.0, random.gauss(28.0, 12.0))
+            passengers = max(0, int(random.gauss(25, 12)))
 
-                msg = {
+            vehicle_positions.append(
+                {
                     "event_id": str(uuid.uuid4()),
-                    "vehicle_id": v["vehicle_id"],
+                    "vehicle_id": int(v["vehicle_id"]),
                     "route_number": route_number_by_id[route_id],
-                    "event_time": t.isoformat().replace("+00:00", "Z"),
-                    "coordinates": {"latitude": lat, "longitude": lon},
+                    "event_time": event_time,
+                    "latitude": float(lat),
+                    "longitude": float(lon),
                     "speed_kmh": float(f"{speed:.1f}"),
-                    "passengers_estimated": passengers,
+                    "passengers_estimated": int(passengers),
                 }
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            )
+        t += timedelta(seconds=position_interval_s)
 
-            t += timedelta(seconds=position_interval_s)
+    if pa is None:
+        raise RuntimeError("pyarrow is required to generate parquet outputs")
 
-    def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
-        with path.open("w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=fieldnames)
-            w.writeheader()
-            w.writerows(rows)
-
-    write_csv(
-        oltp_dir / "users.csv",
-        [{k: u[k] for k in ["user_id", "name", "email", "created_at", "city"]} for u in users],
-        ["user_id", "name", "email", "created_at", "city"],
-    )
-    write_csv(
-        oltp_dir / "routes.csv",
-        routes,
-        ["route_id", "route_number", "vehicle_type", "base_fare"],
-    )
-    write_csv(
-        oltp_dir / "vehicles.csv",
-        vehicles,
-        ["vehicle_id", "route_id", "license_plate", "capacity"],
-    )
-    write_csv(
-        oltp_dir / "rides.csv",
-        rides,
+    users_schema = pa.schema(
         [
-            "ride_id",
-            "user_id",
-            "route_id",
-            "vehicle_id",
-            "start_time",
-            "end_time",
-            "fare_amount",
-        ],
+            ("user_id", pa.int32()),
+            ("name", pa.string()),
+            ("email", pa.string()),
+            ("created_at", pa.string()),
+            ("city", pa.string()),
+        ]
     )
-    write_csv(
-        oltp_dir / "payments.csv",
-        payments,
+    routes_schema = pa.schema(
         [
-            "payment_id",
-            "ride_id",
-            "user_id",
-            "amount",
-            "payment_method",
-            "status",
-            "created_at",
-        ],
+            ("route_id", pa.int32()),
+            ("route_number", pa.string()),
+            ("vehicle_type", pa.string()),
+            ("base_fare", pa.float64()),
+        ]
     )
+    vehicles_schema = pa.schema(
+        [
+            ("vehicle_id", pa.int32()),
+            ("route_id", pa.int32()),
+            ("license_plate", pa.string()),
+            ("capacity", pa.int32()),
+        ]
+    )
+    rides_schema = pa.schema(
+        [
+            ("ride_id", pa.string()),
+            ("user_id", pa.int32()),
+            ("route_id", pa.int32()),
+            ("vehicle_id", pa.int32()),
+            ("start_time", pa.string()),
+            ("end_time", pa.string()),
+            ("fare_amount", pa.float64()),
+        ]
+    )
+    payments_schema = pa.schema(
+        [
+            ("payment_id", pa.string()),
+            ("ride_id", pa.string()),
+            ("user_id", pa.int32()),
+            ("amount", pa.float64()),
+            ("payment_method", pa.string()),
+            ("status", pa.string()),
+            ("created_at", pa.string()),
+        ]
+    )
+    vehicle_positions_schema = pa.schema(
+        [
+            ("event_id", pa.string()),
+            ("vehicle_id", pa.int32()),
+            ("route_number", pa.string()),
+            ("event_time", pa.string()),
+            ("latitude", pa.float64()),
+            ("longitude", pa.float64()),
+            ("speed_kmh", pa.float64()),
+            ("passengers_estimated", pa.int32()),
+        ]
+    )
+
+    users_rows = [{k: u[k] for k in ["user_id", "name", "email", "created_at", "city"]} for u in users]
+
+    _write_parquet(oltp_dir / "users.parquet", users_rows, users_schema)
+    _write_parquet(oltp_dir / "routes.parquet", routes, routes_schema)
+    _write_parquet(oltp_dir / "vehicles.parquet", vehicles, vehicles_schema)
+    _write_parquet(oltp_dir / "rides.parquet", rides, rides_schema)
+    _write_parquet(oltp_dir / "payments.parquet", payments, payments_schema)
+    _write_parquet(kafka_dir / "vehicle_positions.parquet", vehicle_positions, vehicle_positions_schema)
 
 
 def main() -> None:

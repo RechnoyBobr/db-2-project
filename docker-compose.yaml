@@ -18,7 +18,6 @@ services:
     working_dir: /app
     volumes:
       - ./generate_data.py:/app/generate_data.py:ro
-      - ./data:/app/data
     environment:
       - GEN_DAYS=2
       - GEN_USERS=50
@@ -32,7 +31,7 @@ services:
       - MINIO_PREFIX=metropulse
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
-    command: ["/bin/sh", "-lc", "pip install --no-cache-dir boto3 >/dev/null && python /app/generate_data.py"]
+    command: ["/bin/sh", "-lc", "pip install --no-cache-dir boto3 pyarrow >/dev/null && python /app/generate_data.py"]
     depends_on:
       - minio
 
@@ -73,10 +72,43 @@ services:
     environment:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
     command: server /data
     ports:
-      - "9000:9000"
+      - "9300:9000"
       - "37007:37007"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.10
+    environment:
+      - CLICKHOUSE_DB=metropulse_dm
+      - CLICKHOUSE_USER=ch_user
+      - CLICKHOUSE_PASSWORD=ch_password
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  clickhouse-client:
+    profiles: ["tools"]
+    image: clickhouse/clickhouse-client:24.10
+    depends_on:
+      - clickhouse
+    entrypoint: ["clickhouse-client", "--host", "clickhouse"]
 
 volumes:
   pg_data:
+  clickhouse_data:
+  minio_data:
