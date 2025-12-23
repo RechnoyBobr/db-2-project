@@ -44,6 +44,8 @@ services:
       - "7077:7077"
     environment:
       - SPARK_NO_DAEMONIZE=true
+    volumes:
+      - ./data:/opt/spark/data:ro
 
   spark-worker-1:
     image: spark:latest
@@ -52,6 +54,8 @@ services:
       - spark-master
     environment:
       - SPARK_NO_DAEMONIZE=true
+    volumes:
+      - ./data:/opt/spark/data:ro
 
   spark-submit:
     profiles: ["tools"]
@@ -62,9 +66,12 @@ services:
     working_dir: /opt/spark
     volumes:
       - ./jobs:/opt/spark/jobs:ro
+      - ./data:/opt/spark/data:ro
     environment:
       - SPARK_MASTER_URL=spark://spark-master:7077
       - JOBS_DIR=/opt/spark/jobs
+      - SPARK_SUBMIT_EXTRA_ARGS=--packages org.postgresql:postgresql:42.7.3,org.apache.hadoop:hadoop-aws:3.3.6,com.clickhouse:clickhouse-jdbc:0.5.0
+      - RAW_SOURCE=file
     command: ["/bin/sh", "-lc", "/opt/spark/jobs/run-all-jobs.sh"]
 
     # Use `docker compose --profile tools run --rm spark-submit` to run jobs.
