@@ -50,10 +50,24 @@ services:
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077", "--webui-port", "8081"]
     depends_on:
       - spark-master
-    ports:
-      - "8081:8081" # web ui
     environment:
       - SPARK_NO_DAEMONIZE=true
+
+  spark-submit:
+    profiles: ["tools"]
+    image: spark:latest
+    depends_on:
+      - spark-master
+      - spark-worker-1
+    working_dir: /opt/spark
+    volumes:
+      - ./jobs:/opt/spark/jobs:ro
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - JOBS_DIR=/opt/spark/jobs
+    command: ["/bin/sh", "-lc", "/opt/spark/jobs/run-all-jobs.sh"]
+
+    # Use `docker compose --profile tools run --rm spark-submit` to run jobs.
   minio:
     image: minio/minio:latest
     environment:
