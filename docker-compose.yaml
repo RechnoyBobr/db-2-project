@@ -1,0 +1,59 @@
+services:
+  pg:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=metropulse
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./ddl_staging.sql:/docker-entrypoint-initdb.d/01_ddl_staging.sql:ro
+      - ./ddl_core.sql:/docker-entrypoint-initdb.d/02_ddl_core.sql:ro
+
+  generator:
+    image: python:3.12-slim
+    profiles: ["tools"]
+    working_dir: /app
+    volumes:
+      - ./generate_data.py:/app/generate_data.py:ro
+      - ./data:/app/data
+    environment:
+      - GEN_DAYS=2
+      - GEN_USERS=50
+      - GEN_ROUTES=20
+      - GEN_VEHICLES_PER_ROUTE=3
+      - GEN_RIDES_PER_USER_PER_DAY=0.6
+      - GEN_POSITION_INTERVAL_S=30
+      - GEN_UPLOAD_TO_MINIO=1
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_BUCKET=raw
+      - MINIO_PREFIX=metropulse
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: ["/bin/sh", "-lc", "pip install --no-cache-dir boto3 >/dev/null && python /app/generate_data.py"]
+    depends_on:
+      - minio
+  spark:
+    image: spark:latest
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+    ports:
+      - "8080:8080"
+    volumes:
+      - spark_data:/spark
+  minio:
+    image: minio/minio:latest
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data
+    ports:
+      - "9000:9000"
+      - "37007:37007"
+
+volumes:
+  pg_data:
+  spark_data:
